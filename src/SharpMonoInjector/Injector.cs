@@ -1,43 +1,42 @@
 ﻿using System;
-using System.Text;
-using System.ComponentModel;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace SharpMonoInjector
 {
     public class Injector : IDisposable
     {
         private const string mono_get_root_domain = "mono_get_root_domain";
-
         private const string mono_thread_attach = "mono_thread_attach";
-
         private const string mono_image_open_from_data = "mono_image_open_from_data";
-
         private const string mono_assembly_load_from_full = "mono_assembly_load_from_full";
-
         private const string mono_assembly_get_image = "mono_assembly_get_image";
-
         private const string mono_class_from_name = "mono_class_from_name";
-
         private const string mono_class_get_method_from_name = "mono_class_get_method_from_name";
-
         private const string mono_runtime_invoke = "mono_runtime_invoke";
-
         private const string mono_assembly_close = "mono_assembly_close";
-
         private const string mono_image_strerror = "mono_image_strerror";
-
         private const string mono_object_get_class = "mono_object_get_class";
-
         private const string mono_class_get_name = "mono_class_get_name";
+        private const string mono_set_assemblies_path = "mono_set_assemblies_path";
+        private const string mono_assembly_setrootdir = "mono_assembly_setrootdir";
+        private const string mono_set_config_dir = "mono_set_config_dir";
+        private const string mono_jit_init = "mono_jit_init";
+
+        private const string il2cpp_thread_attach = "il2cpp_thread_attach";
+        private const string il2cpp_domain_get = "il2cpp_domain_get";
 
         private readonly Dictionary<string, IntPtr> Exports = new Dictionary<string, IntPtr>
         {
             { mono_get_root_domain, IntPtr.Zero },
+            { il2cpp_domain_get, IntPtr.Zero },
             { mono_thread_attach, IntPtr.Zero },
+            { il2cpp_thread_attach, IntPtr.Zero },
             { mono_image_open_from_data, IntPtr.Zero },
             { mono_assembly_load_from_full, IntPtr.Zero },
             { mono_assembly_get_image, IntPtr.Zero },
@@ -47,56 +46,56 @@ namespace SharpMonoInjector
             { mono_assembly_close, IntPtr.Zero },
             { mono_image_strerror, IntPtr.Zero },
             { mono_object_get_class, IntPtr.Zero },
+            { mono_set_assemblies_path, IntPtr.Zero },
+            { mono_assembly_setrootdir, IntPtr.Zero },
+            { mono_set_config_dir, IntPtr.Zero },
+            { mono_jit_init, IntPtr.Zero },
             { mono_class_get_name, IntPtr.Zero }
         };
 
         private Memory _memory;
 
         private IntPtr _rootDomain;
+        private IntPtr _il2cppDomain;
 
         private bool _attach;
+        private bool _il2cppattach;
 
         private readonly IntPtr _handle;
 
         private IntPtr _mono;
+        private IntPtr _gameAssembly;
+
+        private String etcPath;
 
         public bool Is64Bit { get; private set; }
 
-        public Injector(string processName)
+        public Injector(string processName) : this(Process.GetProcesses().FirstOrDefault(p => p.ProcessName.Equals(processName, StringComparison.OrdinalIgnoreCase))) { }
+        public Injector(int processId) : this(Process.GetProcesses().FirstOrDefault(p => p.Id == processId)) { }
+        public Injector(Process process)
         {
-            Process process = Process.GetProcesses()
-                .FirstOrDefault(p => p.ProcessName
-                .Equals(processName, StringComparison.OrdinalIgnoreCase));
-
+            etcPath = Path.GetDirectoryName(process.MainModule.FileName) + @"\" + Path.GetFileNameWithoutExtension(process.MainWindowTitle) + @"_Data\il2cpp_data\etc";
             if (process == null)
-                throw new InjectorException($"Could not find a process with the name {processName}");
+                throw new InjectorException($"Bad process");
 
             if ((_handle = Native.OpenProcess(ProcessAccessRights.PROCESS_ALL_ACCESS, false, process.Id)) == IntPtr.Zero)
                 throw new InjectorException("Failed to open process", new Win32Exception(Marshal.GetLastWin32Error()));
+#if DEBUG
+            DllInjector.ShowConsole(_handle);
+#endif
 
             Is64Bit = ProcessUtils.Is64BitProcess(_handle);
 
             if (!ProcessUtils.GetMonoModule(_handle, out _mono))
-                throw new InjectorException("Failed to find mono.dll in the target process");
+            {
+                DllInjector.Inject(_handle, Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\mono\mono-2.0-bdwgc.dll");
+                DllInjector.Inject(_handle, Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\mono\MonoPosixHelper.dll");
+                if (!ProcessUtils.GetMonoModule(_handle, out _mono))
+                    throw new InjectorException("Failed to find mono.dll in the target process");
+            }
 
-            _memory = new Memory(_handle);
-        }
-
-        public Injector(int processId)
-        {
-            Process process = Process.GetProcesses()
-                .FirstOrDefault(p => p.Id == processId);
-
-            if (process == null)
-                throw new InjectorException($"Could not find a process with the id {processId}");
-
-            if ((_handle = Native.OpenProcess(ProcessAccessRights.PROCESS_ALL_ACCESS, false, process.Id)) == IntPtr.Zero)
-                throw new InjectorException("Failed to open process", new Win32Exception(Marshal.GetLastWin32Error()));
-
-            Is64Bit = ProcessUtils.Is64BitProcess(_handle);
-
-            if (!ProcessUtils.GetMonoModule(_handle, out _mono))
-                throw new InjectorException("Failed to find mono.dll in the target process");
+            if (!ProcessUtils.GetGameAssembly(_handle, out _gameAssembly))
+                throw new InjectorException("Failed to find GameAssembly.dll in the target process");
 
             _memory = new Memory(_handle);
         }
@@ -124,6 +123,9 @@ namespace SharpMonoInjector
             foreach (ExportedFunction ef in ProcessUtils.GetExportedFunctions(_handle, _mono))
                 if (Exports.ContainsKey(ef.Name))
                     Exports[ef.Name] = ef.Address;
+            foreach (ExportedFunction ef in ProcessUtils.GetExportedFunctions(_handle, _gameAssembly))
+                if (Exports.ContainsKey(ef.Name))
+                    Exports[ef.Name] = ef.Address;
 
             foreach (var kvp in Exports)
                 if (kvp.Value == IntPtr.Zero)
@@ -148,12 +150,15 @@ namespace SharpMonoInjector
 
             ObtainMonoExports();
             _rootDomain = GetRootDomain();
+            _il2cppDomain = GetIl2CppRootDomain();
+
             rawImage = OpenImageFromData(rawAssembly);
             _attach = true;
             assembly = OpenAssemblyFromImage(rawImage);
             image = GetImageFromAssembly(assembly);
             @class = GetClassFromName(image, @namespace, className);
             method = GetMethodFromName(@class, methodName);
+            _il2cppattach = true;
             RuntimeInvoke(method);
             return assembly;
         }
@@ -190,7 +195,25 @@ namespace SharpMonoInjector
         private IntPtr GetRootDomain()
         {
             IntPtr rootDomain = Execute(Exports[mono_get_root_domain]);
+            if (rootDomain == IntPtr.Zero)
+                SetupMono(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"", etcPath);
+            rootDomain = Execute(Exports[mono_get_root_domain]);
             ThrowIfNull(rootDomain, mono_get_root_domain);
+            return rootDomain;
+        }
+
+        private void SetupMono(string assembliesPath, string configDir)
+        {
+            Execute(Exports[mono_set_assemblies_path], _memory.AllocateAndWrite(assembliesPath), IntPtr.Zero);
+            Execute(Exports[mono_assembly_setrootdir], _memory.AllocateAndWrite(assembliesPath), IntPtr.Zero);
+            Execute(Exports[mono_set_config_dir], _memory.AllocateAndWrite(configDir), IntPtr.Zero);
+            Execute(Exports[mono_jit_init], _memory.AllocateAndWrite("MonoLoader"), IntPtr.Zero);
+        }
+
+        private IntPtr GetIl2CppRootDomain()
+        {
+            IntPtr rootDomain = Execute(Exports[il2cpp_domain_get]);
+            ThrowIfNull(rootDomain, il2cpp_domain_get);
             return rootDomain;
         }
 
@@ -273,11 +296,12 @@ namespace SharpMonoInjector
             IntPtr result = Execute(Exports[mono_runtime_invoke],
                 method, IntPtr.Zero, IntPtr.Zero, excPtr);
 
-            IntPtr exc = (IntPtr)_memory.ReadInt(excPtr);
+            IntPtr exc = (IntPtr)_memory.ReadLong(excPtr);
 
-            if (exc != IntPtr.Zero) {
+            if (exc != IntPtr.Zero)
+            {
                 string className = GetClassName(exc);
-                string message = ReadMonoString((IntPtr)_memory.ReadInt(exc + (Is64Bit ? 0x20 : 0x10)));
+                string message = ReadMonoString((IntPtr)_memory.ReadLong(exc + (Is64Bit ? 0x20 : 0x10)));
                 throw new InjectorException($"The managed method threw an exception: ({className}) {message}");
             }
         }
@@ -354,9 +378,16 @@ namespace SharpMonoInjector
 
             asm.SubRsp(40);
 
-            if (_attach) {
+            if (_attach)
+            {
                 asm.MovRax(Exports[mono_thread_attach]);
                 asm.MovRcx(_rootDomain);
+                asm.CallRax();
+            }
+            if (_il2cppattach)
+            {
+                asm.MovRax(Exports[il2cpp_thread_attach]);
+                asm.MovRcx(_il2cppDomain);
                 asm.CallRax();
             }
 
@@ -385,6 +416,30 @@ namespace SharpMonoInjector
             asm.Return();
 
             return asm.ToByteArray();
+        }
+    }
+
+    public class DllInjector
+    {
+        [DllImport("kernel32")] static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+        [DllImport("kernel32")] static extern IntPtr GetModuleHandle(string lpModuleName);
+        [DllImport("kernel32")] static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+        [DllImport("kernel32")] static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+        [DllImport("kernel32")] static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, out UIntPtr lpNumberOfBytesWritten);
+        [DllImport("kernel32")] static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+        public static void Inject(IntPtr procHandle, String dllName)
+        {
+            IntPtr loadLibraryAddr = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
+            IntPtr allocMemAddress = VirtualAllocEx(procHandle, IntPtr.Zero, (uint)((dllName.Length + 1) * Marshal.SizeOf(typeof(char))), 0x3000, 4);
+            WriteProcessMemory(procHandle, allocMemAddress, Encoding.Default.GetBytes(dllName), (uint)((dllName.Length + 1) * Marshal.SizeOf<char>()), out UIntPtr bytesWritten);
+            var t = CreateRemoteThread(procHandle, IntPtr.Zero, 0, loadLibraryAddr, allocMemAddress, 0, IntPtr.Zero);
+            Native.WaitForSingleObject(t, -1);
+        }
+        public static void ShowConsole(IntPtr procHandle)
+        {
+            IntPtr allocConsoleAddr = GetProcAddress(GetModuleHandle("kernel32.dll"), "AllocConsole");
+            var t = CreateRemoteThread(procHandle, IntPtr.Zero, 0, allocConsoleAddr, IntPtr.Zero, 0, IntPtr.Zero);
+            Native.WaitForSingleObject(t, -1);
         }
     }
 }

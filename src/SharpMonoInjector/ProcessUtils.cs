@@ -74,6 +74,46 @@ namespace SharpMonoInjector
             return false;
         }
 
+        public static bool GetGameAssembly(IntPtr handle, out IntPtr monoModule)
+        {
+            int size = Is64BitProcess(handle) ? 8 : 4;
+
+            IntPtr[] ptrs = new IntPtr[0];
+
+            if (!Native.EnumProcessModulesEx(
+                handle, ptrs, 0, out int bytesNeeded, ModuleFilter.LIST_MODULES_ALL)) {
+                throw new InjectorException("Failed to enumerate process modules", new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+
+            int count = bytesNeeded / size;
+            ptrs = new IntPtr[count];
+
+            if (!Native.EnumProcessModulesEx(
+                handle, ptrs, bytesNeeded, out bytesNeeded, ModuleFilter.LIST_MODULES_ALL)) {
+                throw new InjectorException("Failed to enumerate process modules", new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+
+            for (int i = 0; i < count; i++) {
+                StringBuilder path = new StringBuilder(260);
+                Native.GetModuleFileNameEx(handle, ptrs[i], path, 260);
+
+                if (path.ToString().IndexOf("GameAssembly", StringComparison.OrdinalIgnoreCase) > -1) {
+                    if (!Native.GetModuleInformation(handle, ptrs[i], out MODULEINFO info, (uint)(size * ptrs.Length)))
+                        throw new InjectorException("Failed to get module information", new Win32Exception(Marshal.GetLastWin32Error()));
+
+                    var funcs = GetExportedFunctions(handle, info.lpBaseOfDll);
+
+                    if (funcs.Any(f => f.Name == "il2cpp_thread_attach")) {
+                        monoModule = info.lpBaseOfDll;
+                        return true;
+                    }
+                }
+            }
+
+            monoModule = IntPtr.Zero;
+            return false;
+        }
+
         public static bool Is64BitProcess(IntPtr handle)
         {
             if (!Environment.Is64BitOperatingSystem)
