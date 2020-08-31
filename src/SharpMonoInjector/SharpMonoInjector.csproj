@@ -21,4 +21,8 @@
     <OutputPath>..\..\build\release</OutputPath>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="MSFTCompressionCab" Version="1.0.0" />
+  </ItemGroup>
+
 </Project>

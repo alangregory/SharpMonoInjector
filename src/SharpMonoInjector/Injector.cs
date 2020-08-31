@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -88,8 +89,16 @@ namespace SharpMonoInjector
 
             if (!ProcessUtils.GetMonoModule(_handle, out _mono))
             {
-                DllInjector.Inject(_handle, Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\mono\mono-2.0-bdwgc.dll");
-                DllInjector.Inject(_handle, Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\mono\MonoPosixHelper.dll");
+                var monoPath = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                var monoDll = monoPath + @"\mono\mono-2.0-bdwgc.dll";
+                /*if (!File.Exists(monoDll))
+                {
+                    File.WriteAllBytes("mono-2.0-bdwgc.dl_", new WebClient().DownloadData("https://symbolserver.unity3d.com/mono-2.0-bdwgc.dll/5F36619D76c000/mono-2.0-bdwgc.dl_"));
+                    var cab = new Microsoft.Deployment.Compression.Cab.CabInfo("mono-2.0-bdwgc.dl_");
+                    cab.UnpackFile("mono-2.0-bdwgc.dll", monoDll);
+                    File.Delete("mono-2.0-bdwgc.dl_");
+                }*/
+                DllInjector.Inject(_handle, monoDll);
                 if (!ProcessUtils.GetMonoModule(_handle, out _mono))
                     throw new InjectorException("Failed to find mono.dll in the target process");
             }
@@ -195,17 +204,18 @@ namespace SharpMonoInjector
         private IntPtr GetRootDomain()
         {
             IntPtr rootDomain = Execute(Exports[mono_get_root_domain]);
+            var qq = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             if (rootDomain == IntPtr.Zero)
-                SetupMono(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"", etcPath);
+                SetupMono(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\Managed", Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"", etcPath);
             rootDomain = Execute(Exports[mono_get_root_domain]);
             ThrowIfNull(rootDomain, mono_get_root_domain);
             return rootDomain;
         }
 
-        private void SetupMono(string assembliesPath, string configDir)
+        private void SetupMono(string assembliesPath, string rootpath, string configDir)
         {
             Execute(Exports[mono_set_assemblies_path], _memory.AllocateAndWrite(assembliesPath), IntPtr.Zero);
-            Execute(Exports[mono_assembly_setrootdir], _memory.AllocateAndWrite(assembliesPath), IntPtr.Zero);
+            Execute(Exports[mono_assembly_setrootdir], _memory.AllocateAndWrite(rootpath), IntPtr.Zero);
             Execute(Exports[mono_set_config_dir], _memory.AllocateAndWrite(configDir), IntPtr.Zero);
             Execute(Exports[mono_jit_init], _memory.AllocateAndWrite("MonoLoader"), IntPtr.Zero);
         }
@@ -419,6 +429,7 @@ namespace SharpMonoInjector
         }
     }
 
+    
     public class DllInjector
     {
         [DllImport("kernel32")] static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
