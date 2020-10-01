@@ -4,11 +4,25 @@ using System.ComponentModel;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using KernelMemorySharp;
 
 namespace SharpMonoInjector
 {
     public static class ProcessUtils
     {
+        [DllImport("kernel32")] static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+        [DllImport("kernel32")] static extern IntPtr GetModuleHandle(string lpModuleName);
+        [DllImport("kernel32")] static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+        [DllImport("kernel32")] static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
+        [DllImport("kernel32")] static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, out UIntPtr lpNumberOfBytesWritten);
+        [DllImport("kernel32")] static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+        public static void ShowConsole(IntPtr procHandle)
+        {
+            IntPtr allocConsoleAddr = GetProcAddress(GetModuleHandle("kernel32.dll"), "AllocConsole");
+            var t = CreateRemoteThread(procHandle, IntPtr.Zero, 0, allocConsoleAddr, IntPtr.Zero, 0, IntPtr.Zero);
+            Native.WaitForSingleObject(t, -1);
+        }
+
         public static IEnumerable<ExportedFunction> GetExportedFunctions(IntPtr handle, IntPtr mod)
         {
             using (Memory memory = new Memory(handle)) {
@@ -34,8 +48,18 @@ namespace SharpMonoInjector
             }
         }
 
+        public static void InjectDll(String dll)
+        {
+            MemoryDriver.InjectDll(MemoryDriver._ProcessId, dll);
+        }
+
         public static bool GetMonoModule(IntPtr handle, out IntPtr monoModule)
         {
+            if (Memory.IsDriver)
+            {
+                monoModule = (IntPtr)MemoryDriver.GetModule("mono-2.0-bdwgc.dll");
+                return monoModule != IntPtr.Zero;
+            }
             int size = Is64BitProcess(handle) ? 8 : 4;
 
             IntPtr[] ptrs = new IntPtr[0];
@@ -74,8 +98,15 @@ namespace SharpMonoInjector
             return false;
         }
 
-        public static bool GetGameAssembly(IntPtr handle, out IntPtr monoModule)
+        public static bool GetGameAssembly(IntPtr handle, out IntPtr unityModule)
         {
+            if (Memory.IsDriver)
+            {
+                unityModule = (IntPtr)MemoryDriver.GetModule("UserAssembly.dll");
+                if (unityModule == IntPtr.Zero)
+                    unityModule = (IntPtr)MemoryDriver.GetModule("GameAssembly.dll");
+                return unityModule != IntPtr.Zero;
+            }
             int size = Is64BitProcess(handle) ? 8 : 4;
 
             IntPtr[] ptrs = new IntPtr[0];

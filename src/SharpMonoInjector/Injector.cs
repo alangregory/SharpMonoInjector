@@ -75,16 +75,17 @@ namespace SharpMonoInjector
         public Injector(int processId) : this(Process.GetProcesses().FirstOrDefault(p => p.Id == processId)) { }
         public Injector(Process process)
         {
-            etcPath = Path.GetDirectoryName(process.MainModule.FileName) + @"\" + Path.GetFileNameWithoutExtension(process.MainWindowTitle) + @"_Data\il2cpp_data\etc";
+            //etcPath = Path.GetDirectoryName(process.MainModule.FileName) + @"\" + Path.GetFileNameWithoutExtension(process.MainWindowTitle) + @"_Data\il2cpp_data\etc";
+            etcPath = Path.GetDirectoryName(process.MainModule.FileName) + @"\" + Path.GetFileNameWithoutExtension(process.MainWindowTitle) + @"_Data\Native\Data\etc";
             if (process == null)
                 throw new InjectorException($"Bad process");
 
             if ((_handle = Native.OpenProcess(ProcessAccessRights.PROCESS_ALL_ACCESS, false, process.Id)) == IntPtr.Zero)
                 throw new InjectorException("Failed to open process", new Win32Exception(Marshal.GetLastWin32Error()));
+            KernelMemorySharp.MemoryDriver._ProcessId = process.Id;
 #if DEBUG
-            DllInjector.ShowConsole(_handle);
+            ProcessUtils.ShowConsole(_handle);
 #endif
-
             Is64Bit = ProcessUtils.Is64BitProcess(_handle);
 
             if (!ProcessUtils.GetMonoModule(_handle, out _mono))
@@ -98,7 +99,7 @@ namespace SharpMonoInjector
                     cab.UnpackFile("mono-2.0-bdwgc.dll", monoDll);
                     File.Delete("mono-2.0-bdwgc.dl_");
                 }*/
-                DllInjector.Inject(_handle, monoDll);
+                ProcessUtils.InjectDll(monoDll);
                 if (!ProcessUtils.GetMonoModule(_handle, out _mono))
                     throw new InjectorException("Failed to find mono.dll in the target process");
             }
@@ -204,7 +205,6 @@ namespace SharpMonoInjector
         private IntPtr GetRootDomain()
         {
             IntPtr rootDomain = Execute(Exports[mono_get_root_domain]);
-            var qq = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
             if (rootDomain == IntPtr.Zero)
                 SetupMono(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"\Managed", Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + @"", etcPath);
             rootDomain = Execute(Exports[mono_get_root_domain]);
@@ -310,6 +310,7 @@ namespace SharpMonoInjector
 
             if (exc != IntPtr.Zero)
             {
+                Console.WriteLine("Error");
                 string className = GetClassName(exc);
                 string message = ReadMonoString((IntPtr)_memory.ReadLong(exc + (Is64Bit ? 0x20 : 0x10)));
                 throw new InjectorException($"The managed method threw an exception: ({className}) {message}");
@@ -426,31 +427,6 @@ namespace SharpMonoInjector
             asm.Return();
 
             return asm.ToByteArray();
-        }
-    }
-
-    
-    public class DllInjector
-    {
-        [DllImport("kernel32")] static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
-        [DllImport("kernel32")] static extern IntPtr GetModuleHandle(string lpModuleName);
-        [DllImport("kernel32")] static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
-        [DllImport("kernel32")] static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
-        [DllImport("kernel32")] static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, out UIntPtr lpNumberOfBytesWritten);
-        [DllImport("kernel32")] static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
-        public static void Inject(IntPtr procHandle, String dllName)
-        {
-            IntPtr loadLibraryAddr = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
-            IntPtr allocMemAddress = VirtualAllocEx(procHandle, IntPtr.Zero, (uint)((dllName.Length + 1) * Marshal.SizeOf(typeof(char))), 0x3000, 4);
-            WriteProcessMemory(procHandle, allocMemAddress, Encoding.Default.GetBytes(dllName), (uint)((dllName.Length + 1) * Marshal.SizeOf<char>()), out UIntPtr bytesWritten);
-            var t = CreateRemoteThread(procHandle, IntPtr.Zero, 0, loadLibraryAddr, allocMemAddress, 0, IntPtr.Zero);
-            Native.WaitForSingleObject(t, -1);
-        }
-        public static void ShowConsole(IntPtr procHandle)
-        {
-            IntPtr allocConsoleAddr = GetProcAddress(GetModuleHandle("kernel32.dll"), "AllocConsole");
-            var t = CreateRemoteThread(procHandle, IntPtr.Zero, 0, allocConsoleAddr, IntPtr.Zero, 0, IntPtr.Zero);
-            Native.WaitForSingleObject(t, -1);
         }
     }
 }

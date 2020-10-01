@@ -8,6 +8,7 @@ namespace SharpMonoInjector
 {
     public class Memory : IDisposable
     {
+        public static Boolean IsDriver = true;
         private readonly IntPtr _handle;
 
         private readonly Dictionary<IntPtr, int> _allocations = new Dictionary<IntPtr, int>();
@@ -55,6 +56,7 @@ namespace SharpMonoInjector
 
         public byte[] ReadBytes(IntPtr address, int size)
         {
+            if (IsDriver) return KernelMemorySharp.MemoryDriver.ReadBytes(address, size);
             byte[] bytes = new byte[size];
 
             if (!Native.ReadProcessMemory(_handle, address, bytes, size))
@@ -78,9 +80,9 @@ namespace SharpMonoInjector
 
         public IntPtr Allocate(int size)
         {
-            IntPtr addr =
-                Native.VirtualAllocEx(_handle, IntPtr.Zero, size,
-                    AllocationType.MEM_COMMIT, MemoryProtection.PAGE_EXECUTE_READWRITE);
+            IntPtr addr;
+            if (IsDriver) addr = (IntPtr)KernelMemorySharp.MemoryDriver.AllocProcessMem(size);
+            else addr = Native.VirtualAllocEx(_handle, IntPtr.Zero, size, AllocationType.MEM_COMMIT, MemoryProtection.PAGE_EXECUTE_READWRITE);
 
             if (addr == IntPtr.Zero)
                 throw new InjectorException("Failed to allocate process memory", new Win32Exception(Marshal.GetLastWin32Error()));
@@ -91,14 +93,18 @@ namespace SharpMonoInjector
 
         public void Write(IntPtr addr, byte[] data)
         {
-            if (!Native.WriteProcessMemory(_handle, addr, data, data.Length))
+            if (IsDriver)
+            {
+                KernelMemorySharp.MemoryDriver.WriteBytes(addr, data);
+            } else if (!Native.WriteProcessMemory(_handle, addr, data, data.Length))
                 throw new InjectorException("Failed to write process memory", new Win32Exception(Marshal.GetLastWin32Error()));
         }
 
         public void Dispose()
         {
             foreach (var kvp in _allocations)
-                Native.VirtualFreeEx(_handle, kvp.Key, kvp.Value, MemoryFreeType.MEM_DECOMMIT);
+                if (IsDriver) KernelMemorySharp.MemoryDriver.FreeProcessMem((UInt64)kvp.Key);
+                else Native.VirtualFreeEx(_handle, kvp.Key, kvp.Value, MemoryFreeType.MEM_DECOMMIT);
         }
     }
 }
