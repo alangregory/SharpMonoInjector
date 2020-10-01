@@ -135,13 +135,13 @@ namespace SharpMonoInjector
                     var funcs = GetExportedFunctions(handle, info.lpBaseOfDll);
 
                     if (funcs.Any(f => f.Name == "il2cpp_thread_attach")) {
-                        monoModule = info.lpBaseOfDll;
+                        unityModule = info.lpBaseOfDll;
                         return true;
                     }
                 }
             }
 
-            monoModule = IntPtr.Zero;
+            unityModule = IntPtr.Zero;
             return false;
         }
 
