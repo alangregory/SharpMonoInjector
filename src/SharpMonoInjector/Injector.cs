@@ -99,7 +99,7 @@ namespace SharpMonoInjector
                     cab.UnpackFile("mono-2.0-bdwgc.dll", monoDll);
                     File.Delete("mono-2.0-bdwgc.dl_");
                 }*/
-                ProcessUtils.InjectDll(monoDll);
+                ProcessUtils.InjectDll(_handle, monoDll);
                 if (!ProcessUtils.GetMonoModule(_handle, out _mono))
                     throw new InjectorException("Failed to find mono.dll in the target process");
             }
@@ -310,9 +310,8 @@ namespace SharpMonoInjector
 
             if (exc != IntPtr.Zero)
             {
-                Console.WriteLine("Error");
                 string className = GetClassName(exc);
-                string message = ReadMonoString((IntPtr)_memory.ReadLong(exc + (Is64Bit ? 0x20 : 0x10)));
+                string message = ReadMonoString((IntPtr)_memory.ReadLong(exc + (Is64Bit ? 0x18 : 0x10)));
                 throw new InjectorException($"The managed method threw an exception: ({className}) {message}");
             }
         }

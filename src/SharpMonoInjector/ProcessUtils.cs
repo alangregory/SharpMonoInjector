@@ -48,9 +48,17 @@ namespace SharpMonoInjector
             }
         }
 
-        public static void InjectDll(String dll)
+        public static void InjectDll(IntPtr handle, String dll)
         {
-            MemoryDriver.InjectDll(MemoryDriver._ProcessId, dll);
+            if (Memory.IsDriver) MemoryDriver.InjectDll(MemoryDriver._ProcessId, dll);
+            else
+            {
+                IntPtr loadLibraryAddr = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
+                IntPtr allocMemAddress = VirtualAllocEx(handle, IntPtr.Zero, (uint)((dll.Length + 1) * Marshal.SizeOf(typeof(char))), 0x3000, 4);
+                WriteProcessMemory(handle, allocMemAddress, Encoding.Default.GetBytes(dll), (uint)((dll.Length + 1) * Marshal.SizeOf<char>()), out UIntPtr bytesWritten);
+                var t = CreateRemoteThread(handle, IntPtr.Zero, 0, loadLibraryAddr, allocMemAddress, 0, IntPtr.Zero);
+                Native.WaitForSingleObject(t, -1);
+            }
         }
 
         public static bool GetMonoModule(IntPtr handle, out IntPtr monoModule)
@@ -128,7 +136,7 @@ namespace SharpMonoInjector
                 StringBuilder path = new StringBuilder(260);
                 Native.GetModuleFileNameEx(handle, ptrs[i], path, 260);
 
-                if (path.ToString().IndexOf("GameAssembly", StringComparison.OrdinalIgnoreCase) > -1) {
+                if (path.ToString().IndexOf("GameAssembly", StringComparison.OrdinalIgnoreCase) > -1 || path.ToString().IndexOf("UserAssembly", StringComparison.OrdinalIgnoreCase) > -1) {
                     if (!Native.GetModuleInformation(handle, ptrs[i], out MODULEINFO info, (uint)(size * ptrs.Length)))
                         throw new InjectorException("Failed to get module information", new Win32Exception(Marshal.GetLastWin32Error()));
 
